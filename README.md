@@ -1,8 +1,8 @@
 # KBL realdata scheduler
 
-`onnebang/kbl_realdata`의 운영 수집 작업만 실행하는 비공개 저장소다. 공개 소스 저장소와
-Supabase 쓰기 자격증명을 분리하기 위해 존재하며, 애플리케이션 코드는 이 저장소에 복사하지
-않는다.
+`onnebang/kbl_realdata`의 운영 수집 작업만 실행하는 공개 저장소다. 예약 workflow의 관리
+경계를 애플리케이션 소스와 분리하기 위해 존재하며, 애플리케이션 코드는 이 저장소에 복사하지
+않는다. Supabase 쓰기 자격증명 값은 커밋하지 않고 암호화된 GitHub Actions Secrets에만 둔다.
 
 ## Workflows
 
@@ -26,11 +26,10 @@ Secrets는 각 Python 실행 step에만 전달한다. checkout, Python 설치, �
 
 ## Cutover / recovery
 
-1. 저장소가 `Private`인지 확인한다.
+1. 저장소가 `Public`인지 확인한다.
 2. 두 Actions secrets를 등록한다.
 3. `KBL Daily Batch`를 수동 실행해 성공을 확인한다.
 4. 경기 없는 시간에 `KBL Live Collector`를 `once=true`로 수동 실행해 한 주기만 확인한다.
 5. 공개 `kbl_realdata` 저장소의 기존 예약 workflow 두 개가 제거됐는지 확인한다.
 6. 같은 시간대에 로컬 Windows `KBL_LiveCollector`/`KBL_DailyBatch`와 클라우드 잡을 함께
    켜지 않는다. 장애 시에는 클라우드 workflow를 끄고 로컬 태스크를 복구 경로로 쓴다.
-

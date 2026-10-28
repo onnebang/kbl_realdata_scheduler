@@ -1,0 +1,63 @@
+# 운영 사이트 예약 모니터. kbl_realdata가 비공개가 되면서 그 저장소의 GitHub Actions(CI·배포 후 스모크)는 계정 한도 문제로
+# 돌지 않는다(2026-10-28 비활성화). 같은 점검을 공개 저장소인 여기서 운영 주소에 대해 30분마다 돌린다(공개 저장소라 실행 시간 무료).
+# 배포마다 도는 게 아니라서 배포 커밋과의 일치 검사는 없다 - /api/health의 DB 조회(probe)·키-프로젝트 일치, 주요 페이지 9곳이 200이고
+# 오류 화면(class="es-code")이 아닌지를 본다. 하나라도 어긋나면 이 workflow가 실패해 GitHub 알림 메일이 간다.
+#
+# Bot Protection이 Challenge라 러너의 curl은 429로 막힌다. 저장소 시크릿 SMOKE_BYPASS_TOKEN을 x-courtside-smoke 헤더로 보내고,
+# Vercel 방화벽의 "헤더 x-courtside-smoke가 그 토큰과 같으면 Bypass" 규칙이 챌린지를 건너뛰게 한다. 공개 저장소의 로그는 누구나 볼 수
+# 있으므로 토큰·헤더 값·응답 본문은 출력하지 않는다(health는 커밋 SHA만 찍는다).
+name: Courtside Monitor
+
+on:
+  schedule:
+    # 매시 7분·37분(정각 혼잡을 피함). GitHub cron은 몇 분~몇 시간 늦을 수 있다.
+    - cron: "7,37 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: courtside-monitor
+  cancel-in-progress: true
+
+env:
+  BASE: https://courtside.ai.kr
+
+jobs:
+  monitor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: health와 주요 페이지 확인
+        env:
+          BYPASS: ${{ secrets.SMOKE_BYPASS_TOKEN }}
+        run: |
+          fail=0
+          blocked=0
+          auth=()
+          if [ -n "$BYPASS" ]; then auth=(-H "x-courtside-smoke: $BYPASS"); fi
+          echo "대상: $BASE (우회 시크릿 $([ -n "$BYPASS" ] && echo 있음 || echo 없음))"
+          health=$(curl -s --max-time 30 --retry 2 --retry-delay 5 "${auth[@]}" "$BASE/api/health")
+          if echo "$health" | jq -e '.probe == "ok" and .keyMatchesProject == true' > /dev/null 2>&1; then
+            echo "health ok  커밋 $(echo "$health" | jq -r '.commit // "?"')"
+          else
+            echo "::error::/api/health 이상 - DB 조회(probe) 실패, 키-프로젝트 불일치, 또는 JSON이 아님(챌린지 429)"; fail=1
+          fi
+          for p in / /preseason /teams /players /coaches /leaderboards/season /players/290790 /teams/66 /games/S47G03N18; do
+            body=$(mktemp)
+            code=$(curl -s --max-time 60 --retry 2 --retry-delay 5 "${auth[@]}" -o "$body" -w "%{http_code}" "$BASE$p")
+            size=$(wc -c < "$body")
+            if [ "$code" != "200" ]; then
+              echo "::error::$p HTTP $code"; fail=1
+              if [ "$code" = "429" ]; then blocked=1; fi
+            elif grep -q 'class="es-code"' "$body"; then
+              echo "::error::$p 오류 화면이 렌더됨"; fail=1
+            else
+              echo "ok  $p  ${size}B"
+            fi
+          done
+          if [ "$blocked" = "1" ]; then
+            echo "::error::HTTP 429는 Bot Protection 챌린지에 막힌 것일 수 있음 - 저장소 시크릿 SMOKE_BYPASS_TOKEN과 Vercel 방화벽의 Bypass 규칙(헤더 x-courtside-smoke)을 확인"
+          fi
+          exit $fail

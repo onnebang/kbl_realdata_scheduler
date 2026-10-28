@@ -21,7 +21,7 @@ concurrency:
 
 env:
   SOURCE_REPOSITORY: onnebang/kbl_realdata
-  # 공개 저장소의 검토 완료 커밋만 실행한다. 수집기 변경을 배포할 때 두 workflow를 함께 올릴 것.
+  # 비공개 저장소의 검토 완료 커밋만 실행한다(읽기 전용 deploy key로 체크아웃). 수집기 변경을 배포할 때 두 workflow를 함께 올릴 것.
   SOURCE_REF: 03cba9e38ff3ec6a7e0b407359109a1e02132875
 
 jobs:
@@ -35,6 +35,7 @@ jobs:
           repository: ${{ env.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_REF }}
           path: source
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
           persist-credentials: false
 
       - name: Set up Python 3.11

@@ -1,7 +1,7 @@
 # 운영 사이트 예약 모니터. kbl_realdata가 비공개가 되면서 그 저장소의 GitHub Actions(CI·배포 후 스모크)는 계정 한도 문제로
 # 돌지 않는다(2026-10-28 비활성화). 같은 점검을 공개 저장소인 여기서 운영 주소에 대해 30분마다 돌린다(공개 저장소라 실행 시간 무료).
 # 배포마다 도는 게 아니라서 배포 커밋과의 일치 검사는 없다 - /api/health의 DB 조회(probe)·키-프로젝트 일치, 주요 페이지 9곳이 200이고
-# 오류 화면(class="es-code")이 아닌지를 본다. 하나라도 어긋나면 이 workflow가 실패해 GitHub 알림 메일이 간다.
+# 오류 화면(class="es-code")이 아닌지, 기능 2곳(경기당 평균·PBP 코트 위 카드)의 필수 문구가 HTML에 있는지를 본다. 하나라도 어긋나면 이 workflow가 실패해 GitHub 알림 메일이 간다.
 #
 # Bot Protection이 Challenge라 러너의 curl은 429로 막힌다. 저장소 시크릿 SMOKE_BYPASS_TOKEN을 x-courtside-smoke 헤더로 보내고,
 # Vercel 방화벽의 "헤더 x-courtside-smoke가 그 토큰과 같으면 Bypass" 규칙이 챌린지를 건너뛰게 한다. 공개 저장소의 로그는 누구나 볼 수
@@ -55,6 +55,21 @@ jobs:
               echo "::error::$p 오류 화면이 렌더됨"; fail=1
             else
               echo "ok  $p  ${size}B"
+            fi
+          done
+          # 화면 회귀: 200이어도 기능이 빠지면 잡도록 서버 HTML에 꼭 있어야 하는 문구를 본다(2026-11-03 추가).
+          # 경기당 평균 단위 설명은 ?rate=perGame일 때만 렌더되고, PBP 코트 위 카드는 종료 경기에도 섹션이 남는다.
+          for check in "/players/291488?rate=perGame|합계 ÷ 실제 출전 경기 수" "/games/S49G01N50?tab=playbyplay|코트 위 5대5 라인업"; do
+            p=${check%%|*}; mark=${check#*|}
+            body=$(mktemp)
+            code=$(curl -s --max-time 60 --retry 2 --retry-delay 5 "${auth[@]}" -o "$body" -w "%{http_code}" "$BASE$p")
+            if [ "$code" != "200" ]; then
+              echo "::error::$p HTTP $code"; fail=1
+              if [ "$code" = "429" ]; then blocked=1; fi
+            elif ! grep -qF "$mark" "$body"; then
+              echo "::error::$p 에 '$mark' 없음 - 기능 회귀"; fail=1
+            else
+              echo "ok  $p  (문구 확인)"
             fi
           done
           if [ "$blocked" = "1" ]; then

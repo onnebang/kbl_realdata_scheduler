@@ -2,8 +2,10 @@ name: KBL Live Collector
 
 on:
   schedule:
-    # 04:00 UTC = 13:00 KST
-    - cron: "0 4 * * *"
+    # KST 12:07 / 17:07 / 22:07. Overlap covers the <6h runner handoff.
+    - cron: "7 3 * * *"
+    - cron: "7 8 * * *"
+    - cron: "7 13 * * *"
   workflow_dispatch:
     inputs:
       once:
@@ -16,13 +18,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: live-collector
+  group: live-collector-${{ github.event.schedule || 'manual' }}
   cancel-in-progress: false
 
 env:
   SOURCE_REPOSITORY: onnebang/kbl_realdata
   # 비공개 저장소의 검토 완료 커밋만 실행한다(읽기 전용 deploy key로 체크아웃). 수집기 변경을 배포할 때 두 workflow를 함께 올릴 것.
-  SOURCE_REF: 69e0f3a7b3af6ed0e8d484fec72de886501cef68
+  SOURCE_REF: ae6bf14f84e1043dd658ab5985c1e3a5e4ea5f2a
 
 jobs:
   collect:
@@ -48,6 +50,45 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --requirement source/tools/requirements.txt
 
+      - name: Set up Bun for Firebase Admin sender
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2, audited 2026-11-16
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install locked sender dependencies
+        working-directory: source/courtside-mobile
+        run: bun install --frozen-lockfile
+
+      - name: Prepare server Firebase credential
+        env:
+          FIREBASE_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          text = os.environ.get('FIREBASE_JSON', '')
+          if not text:
+              print('::warning::FIREBASE_SERVICE_ACCOUNT_JSON is missing; collection continues without mobile push.')
+          else:
+              value = json.loads(text)
+              if value.get('type') != 'service_account' or not value.get('project_id') or not value.get('private_key'):
+                  raise SystemExit('Invalid Firebase service account JSON; secret values are not logged.')
+              path = Path(os.environ['RUNNER_TEMP']) / 'courtside-firebase-admin.json'
+              path.write_text(json.dumps(value), encoding='utf-8')
+              path.chmod(0o600)
+              with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+                  env.write(f'GOOGLE_APPLICATION_CREDENTIALS={path}\nKBL_FAVORITE_PUSH_ENABLED=1\nKBL_MOBILE_PUSH_STATE=postgres\n')
+              print('Firebase topic push enabled; device tokens and private keys are not logged.')
+          PY
+
+      - name: Prepare shared server-only delivery ledger
+        if: env.KBL_FAVORITE_PUSH_ENABLED == '1'
+        working-directory: source
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python tools/setup_mobile_push.py --apply
+
       - name: Run live collector
         working-directory: source/tools
         shell: bash
@@ -61,3 +102,20 @@ jobs:
           else
             python live_collector.py --max-runtime 20700 --stall-timeout 5400
           fi
+
+      - name: Retry unexpired result and score deliveries
+        if: always() && env.KBL_FAVORITE_PUSH_ENABLED == '1'
+        working-directory: source
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python tools/mobile_push.py --flush
+
+      - name: Remove temporary Firebase credential
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          (Path(os.environ['RUNNER_TEMP']) / 'courtside-firebase-admin.json').unlink(missing_ok=True)
+          PY

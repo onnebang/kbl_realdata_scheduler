@@ -9,7 +9,7 @@
 
 | workflow | schedule (KST) | command |
 |---|---:|---|
-| `KBL Live Collector` | 매일 13:00 | `live_collector.py --max-runtime 20700 --stall-timeout 5400` |
+| `KBL Live Collector` | 매일 12:07·17:07·22:07 | `live_collector.py --max-runtime 20700 --stall-timeout 5400` |
 | `KBL Daily Batch` | 매일 06:00 | `daily_batch.py` |
 | `Courtside Monitor` | 30분마다(매시 7분·37분) | 운영 사이트 `/api/health`(DB 조회·키-프로젝트 일치)와 주요 페이지 9곳 점검 |
 
@@ -24,6 +24,10 @@
 볼 수 있으므로 토큰·응답 본문은 출력하지 않는다.
 
 ## Required Actions secrets
+
+- `FIREBASE_SERVICE_ACCOUNT_JSON`: Android 앱과 같은 Firebase 프로젝트의 서버 서비스 계정 JSON 전체.
+  암호화된 Actions Secret에만 등록한다. 런타임 임시 파일(0600)로 만들고 종료 시 삭제하며
+  앱·소스·아티팩트·로그에 넣지 않는다. 미등록이면 수집은 계속되지만 모바일 알림·점수판은 발송하지 않는다.
 
 - `DATABASE_URL`: Supabase 직결 쓰기 URL. RLS를 우회하므로 로그에 출력하거나 공개 저장소에
   넣지 않는다.

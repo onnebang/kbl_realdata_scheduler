@@ -1,0 +1,122 @@
+name: KBL Daily Spotlight Alerts
+
+on:
+  schedule:
+    # KST 12:15 (03:15 UTC) 오늘의 주목 선수 / KST 19:15 (10:15 UTC) 오늘의 팀 리포트
+    - cron: "15 3 * * *"
+    - cron: "15 10 * * *"
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "발송 슬롯 (auto / morning / evening)"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - morning
+          - evening
+      force:
+        description: "경기일에도 테스트 발송"
+        required: true
+        default: false
+        type: boolean
+      dry_run:
+        description: "실제 FCM 전송 없이 대상만 확인"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spotlight-alerts
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: onnebang/kbl_realdata
+  SOURCE_REF: 6df858739b1f6352989720bfdb575d42bdab48d2
+
+jobs:
+  spotlight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout audited spotlight source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_REF }}
+          path: source
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/tools/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --requirement source/tools/requirements.txt
+
+      - name: Set up Bun for Firebase Admin sender
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install locked sender dependencies
+        working-directory: source/courtside-mobile
+        run: bun install --frozen-lockfile
+
+      - name: Prepare server Firebase credential
+        env:
+          FIREBASE_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          text = os.environ.get('FIREBASE_JSON', '')
+          if not text:
+              raise SystemExit('FIREBASE_SERVICE_ACCOUNT_JSON secret is missing.')
+          value = json.loads(text)
+          if value.get('type') != 'service_account' or not value.get('project_id') or not value.get('private_key'):
+              raise SystemExit('Invalid Firebase service account JSON; secret values are not logged.')
+          path = Path(os.environ['RUNNER_TEMP']) / 'courtside-firebase-admin.json'
+          path.write_text(json.dumps(value), encoding='utf-8')
+          path.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'GOOGLE_APPLICATION_CREDENTIALS={path}\nKBL_FAVORITE_PUSH_ENABLED=1\n')
+          print('Firebase spotlight credential ready; private values are not logged.')
+          PY
+
+      - name: Ensure spotlight delivery ledger exists
+        working-directory: source
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python tools/setup_mobile_push.py --apply
+
+      - name: Send daily spotlight notification
+        working-directory: source/tools
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          args=(--slot "${{ inputs.slot || 'auto' }}")
+          if [[ "${{ inputs.force }}" == "true" ]]; then args+=(--force); fi
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then args+=(--dry-run); fi
+          python mobile_spotlight.py "${args[@]}"
+
+      - name: Remove temporary Firebase credential
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          (Path(os.environ['RUNNER_TEMP']) / 'courtside-firebase-admin.json').unlink(missing_ok=True)
+          PY

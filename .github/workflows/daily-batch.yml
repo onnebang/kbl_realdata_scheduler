@@ -16,7 +16,7 @@ concurrency:
 env:
   SOURCE_REPOSITORY: onnebang/kbl_realdata
   # 비공개 저장소의 검토 완료 커밋만 실행한다(읽기 전용 deploy key로 체크아웃). 수집기 변경을 배포할 때 두 workflow를 함께 올릴 것.
-  SOURCE_REF: ae6bf14f84e1043dd658ab5985c1e3a5e4ea5f2a
+  SOURCE_REF: cf0d807fdddd49846d1dcd744449ce47f9140f39
 
 jobs:
   batch:
